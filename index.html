@@ -8,18 +8,25 @@
   :root { --bg:#111; --panel:#1c1c1e; --text:#eee; --muted:#999; --accent:#ff6a2b; }
   * { box-sizing:border-box; }
   body { margin:0; background:var(--bg); color:var(--text); font:15px/1.4 system-ui, sans-serif; }
-  header, .bar { padding:10px 16px; display:flex; flex-wrap:wrap; gap:8px 14px; align-items:center; }
+  header, .bar { padding:8px 16px; display:flex; flex-wrap:wrap; gap:8px 12px; align-items:center; }
   header h1 { font-size:17px; margin:0 auto 0 0; }
   label.file, button, .seg label { background:var(--panel); border:1px solid #333; color:var(--text); border-radius:8px; padding:8px 12px; cursor:pointer; font:inherit; }
+  button:disabled { opacity:.4; cursor:default; }
   label.file input { display:none; }
-  .seg { display:flex; } .seg input { display:none; }
+  .seg { display:flex; flex-wrap:wrap; } .seg input { display:none; }
   .seg label { border-radius:0; } .seg label:first-of-type { border-radius:8px 0 0 8px; } .seg label:last-of-type { border-radius:0 8px 8px 0; }
   .seg input:checked + label { background:var(--accent); border-color:var(--accent); color:#000; }
   .row { display:flex; align-items:center; gap:8px; flex:1 1 220px; }
-  .row span { color:var(--muted); min-width:92px; } .row input[type=range] { flex:1; accent-color:var(--accent); }
-  #stage { display:flex; justify-content:center; padding:0 16px; }
-  canvas { max-width:100%; max-height:72vh; touch-action:none; background:#000; border-radius:6px; }
-  .hint { color:var(--muted); font-size:13px; padding:0 16px 16px; }
+  .row span { color:var(--muted); } .row input[type=range] { flex:1; accent-color:var(--accent); }
+  .stage { display:flex; justify-content:center; padding:0 16px; }
+  #cv { max-width:100%; max-height:72vh; touch-action:none; background:#000; border-radius:6px; }
+  .pickrow { display:flex; flex-wrap:wrap; gap:8px; padding:0 16px; }
+  .pickrow div { flex:1 1 280px; } .pickrow canvas { width:100%; touch-action:none; border-radius:6px; background:#000; }
+  .pickrow b { display:block; color:var(--muted); font-weight:normal; font-size:13px; }
+  #status { color:var(--muted); font-size:14px; } #status b { color:var(--text); }
+  .good { color:#4cd964 !important; } .warn { color:#ffcc00 !important; } .bad { color:#ff453a !important; }
+  .hint { color:var(--muted); font-size:13px; padding:0 16px; margin:4px 0 8px; }
+  #loupe { position:fixed; width:150px; height:150px; border-radius:50%; border:3px solid #fff; pointer-events:none; z-index:9; box-shadow:0 2px 12px #000; }
   [hidden] { display:none !important; }
 </style>
 </head>
@@ -28,122 +35,299 @@
   <h1>IR Leakage Detection</h1>
   <label class="file">📷 Фото<input id="fileV" type="file" accept="image/*"></label>
   <label class="file">🌡 Тепловизор<input id="fileT" type="file" accept="image/*"></label>
+  <label><input type="checkbox" id="align"> Совмещение по точкам</label>
 </header>
+
+<section id="pick" hidden>
+  <p class="hint">Нажмите заметную точку на фото (угол двери, край розетки, угол окна), затем ту же точку на тепловизоре. Нужно минимум 4 пары, для проверки — 6–8, по всему кадру, а не в одном месте. Точку можно тянуть: появится лупа.</p>
+  <div class="pickrow">
+    <div><b>Фото</b><canvas id="pv"></canvas></div>
+    <div><b>Тепловизор</b><canvas id="pt"></canvas></div>
+  </div>
+  <div class="bar">
+    <button id="undo">↶ Убрать точку</button>
+    <button id="clear">Очистить точки</button>
+    <button id="auto">✨ Авто‑уточнение</button>
+    <button id="unauto" disabled>Отменить уточнение</button>
+    <button id="copyAlign">Копировать JSON</button>
+  </div>
+</section>
 
 <div class="bar">
   <div class="seg">
     <input type="radio" name="mode" id="mOpacity" value="opacity" checked><label for="mOpacity">Прозрачность</label>
     <input type="radio" name="mode" id="mSwipe" value="swipe"><label for="mSwipe">Шторка</label>
+    <input type="radio" name="mode" id="mChecker" value="checker"><label for="mChecker">Шахматка</label>
+    <input type="radio" name="mode" id="mEdges" value="edges"><label for="mEdges">Контуры</label>
   </div>
   <div class="row" id="rowOpacity"><span>Тепловизор</span><input id="opacity" type="range" min="0" max="1" step="0.01" value="0.6"></div>
   <div class="row" id="rowSwipe" hidden><span>Шторка</span><input id="swipe" type="range" min="0" max="1" step="0.001" value="0.5"></div>
-</div>
-
-<div id="stage"><canvas id="cv" width="1200" height="1600"></canvas></div>
-
-<div class="bar">
-  <label><input type="checkbox" id="align"> Выравнивание</label>
-  <div class="row align"><span>Масштаб</span><input id="scale" type="range" min="0.2" max="3" step="0.005" value="1"></div>
-  <div class="row align"><span>Поворот</span><input id="rot" type="range" min="-15" max="15" step="0.1" value="0"></div>
-  <button id="reset" class="align">Сброс</button>
-  <button id="copyAlign" class="align">Копировать JSON</button>
   <button id="save">⬇ PNG</button>
 </div>
-<p class="hint" id="hint">Загрузите фото и снимок тепловизора. В режиме «Выравнивание» тяните тепловизор пальцем/мышью, масштаб — двумя пальцами или колесом. Выравнивание запоминается для следующих пар.</p>
 
+<div class="stage"><canvas id="cv" width="1200" height="1600"></canvas></div>
+<div class="bar" id="status">Загрузите фото и снимок тепловизора.</div>
+<p class="hint">Проверка ровности: «Шахматка» — линии не должны ломаться на границах клеток; «Контуры» — голубые контуры фото и красные тепловизора должны слиться в белые.</p>
+<canvas id="loupe" width="300" height="300" hidden></canvas>
+
+<script src="align-core.js"></script>
 <script>
 const $ = id => document.getElementById(id);
 const cv = $('cv'), ctx = cv.getContext('2d');
-const MAX_SIDE = 2000;           // cap export size so phones don't run out of memory
-let V = null, T = null;          // loaded images
-// Alignment in fractions of the photo so it carries over between pairs of any size:
-// x,y = thermal centre; w = thermal width as share of photo width; rot = degrees.
-const DEFAULT = { x:0.5, y:0.5, w:1, rot:0 };
-let A = load() || { ...DEFAULT };
+const wc = document.createElement('canvas'), wctx = wc.getContext('2d'); // thermal warped onto the photo
+const MAX_SIDE = 1600, AN = 384;  // display size cap, analysis width for edge scoring
+// shortcut: HUD boxes of this thermal camera's screenshots (u0,v0,u1,v1) are hard-coded; add boxes when another camera appears.
+const HUD = [[0, 0, 0.42, 0.2], [0.8, 0, 1, 1], [0, 0.92, 1, 1]];
+const inHud = (u, v) => HUD.some(([a, b, c, d]) => u >= a && u <= c && v >= b && v <= d);
 
-function load() { try { return JSON.parse(localStorage.getItem('irld-align')); } catch { return null; } }
-function store() { try { localStorage.setItem('irld-align', JSON.stringify(A)); } catch {} }
+let V = null, T = null, tData = null, an = null;
+let pairs = [];          // [{p:[x,y]|null, t:[u,v]|null}] normalised coords on photo / thermal
+let H = null, Hbefore = null;
+const tA = () => T.naturalWidth / T.naturalHeight, pA = () => V.naturalWidth / V.naturalHeight;
+const complete = () => pairs.filter(q => q.p && q.t);
 const mode = () => document.querySelector('input[name=mode]:checked').value;
+const ready = () => V && T;
 
-function draw() {
-  const W = cv.width, H = cv.height, alignOn = $('align').checked;
-  ctx.clearRect(0, 0, W, H);
-  if (V) ctx.drawImage(V, 0, 0, W, H);
-  if (!T) return;
-  const swipe = mode() === 'swipe' && !alignOn, divX = $('swipe').value * W;
-  ctx.save();
-  if (swipe) { ctx.beginPath(); ctx.rect(0, 0, divX, H); ctx.clip(); }
-  ctx.globalAlpha = alignOn ? 0.5 : swipe ? 1 : +$('opacity').value;
-  const tw = A.w * W, th = tw * T.naturalHeight / T.naturalWidth;
-  ctx.translate(A.x * W, A.y * H); ctx.rotate(A.rot * Math.PI / 180);
-  ctx.drawImage(T, -tw / 2, -th / 2, tw, th);
-  ctx.restore();
-  if (swipe) {
-    ctx.fillStyle = '#fff'; ctx.fillRect(divX - 2, 0, 4, H);
-    ctx.beginPath(); ctx.arc(divX, H / 2, W * 0.025, 0, 7); ctx.fill();
-  }
+function storedH() { try { return JSON.parse(localStorage.getItem('irld-H')); } catch { return null; } }
+function store() { try { localStorage.setItem('irld-H', JSON.stringify(H)); } catch {} }
+function score(h) { return an ? edgeScore(an.Gp, an.Gt, an.tw, an.th, h, an.pw, an.ph) : NaN; }
+
+function pixels(img, w, h) {
+  const c = document.createElement('canvas'); c.width = w; c.height = h;
+  const x = c.getContext('2d'); x.imageSmoothingQuality = 'high'; x.drawImage(img, 0, 0, w, h);
+  return x.getImageData(0, 0, w, h).data;
+}
+function chans(d, n, list) { return list.map(k => Float32Array.from({ length: n }, (_, i) => d[i * 4 + k])); }
+
+function onImages() {
+  if (!ready()) return render();
+  tData = (() => { const c = document.createElement('canvas'); c.width = T.naturalWidth; c.height = T.naturalHeight;
+    const x = c.getContext('2d'); x.drawImage(T, 0, 0); return x.getImageData(0, 0, c.width, c.height); })();
+  const pw = AN, ph = Math.round(AN / pA()), tw = AN, th = Math.round(AN / tA());
+  const pd = pixels(V, pw, ph), td = pixels(T, tw, th);
+  const lum = Float32Array.from({ length: pw * ph }, (_, i) => 0.299 * pd[i * 4] + 0.587 * pd[i * 4 + 1] + 0.114 * pd[i * 4 + 2]);
+  an = { pw, ph, tw, th, Gp: gradMag([lum], pw, ph), Gt: gradMag(chans(td, tw * th, [0, 1, 2]), tw, th, inHud) };
+  pairs = []; Hbefore = null;
+  H = H || storedH() || defaultH(tA(), pA());
+  render(true);
 }
 
 function setPhoto(img) {
   V = img;
   const k = Math.min(1, MAX_SIDE / Math.max(img.naturalWidth, img.naturalHeight));
-  cv.width = Math.round(img.naturalWidth * k); cv.height = Math.round(img.naturalHeight * k);
-  draw();
+  cv.width = wc.width = Math.round(img.naturalWidth * k); cv.height = wc.height = Math.round(img.naturalHeight * k);
+  sizePick($('pv'), img); onImages();
 }
+function setThermal(img) { T = img; sizePick($('pt'), img); onImages(); }
+function sizePick(c, img) { const k = Math.min(1, 1000 / img.naturalWidth); c.width = img.naturalWidth * k; c.height = img.naturalHeight * k; }
 function loadImg(src, cb) { const i = new Image(); i.onload = () => cb(i); i.onerror = () => alert('Не удалось открыть: ' + src); i.src = src; }
 function onFile(input, cb) { input.onchange = () => { const f = input.files[0]; if (f) loadImg(URL.createObjectURL(f), cb); }; }
 onFile($('fileV'), setPhoto);
-onFile($('fileT'), img => { T = img; if (!load()) $('align').checked = true; syncSliders(); draw(); });
+onFile($('fileT'), setThermal);
 
-function syncSliders() { $('scale').value = A.w; $('rot').value = A.rot; }
-$('scale').oninput = e => { A.w = +e.target.value; store(); draw(); };
-$('rot').oninput = e => { A.rot = +e.target.value; store(); draw(); };
-$('opacity').oninput = $('swipe').oninput = $('align').onchange = draw;
-document.querySelectorAll('input[name=mode]').forEach(r => r.onchange = () => {
-  $('rowOpacity').hidden = mode() !== 'opacity'; $('rowSwipe').hidden = mode() !== 'swipe'; draw();
-});
-$('reset').onclick = () => { A = { ...DEFAULT }; store(); syncSliders(); draw(); };
+function refit() {
+  const c = complete();
+  if (ready() && c.length >= 2) { H = fitH(c, tA(), pA()) || H; Hbefore = null; store(); }
+  render(true);
+}
+
+// Inverse-map every display pixel into the thermal image (bilinear).
+function warpThermal() {
+  const W = wc.width, Hh = wc.height, out = wctx.createImageData(W, Hh), d = out.data;
+  const s = tData.data, tw = tData.width, th = tData.height, [a, b, c, e, f, g, h, k, l] = invertH(H);
+  for (let y = 0; y < Hh; y++) {
+    const Y = (y + 0.5) / Hh;
+    for (let x = 0; x < W; x++) {
+      const X = (x + 0.5) / W, w = h * X + k * Y + l;
+      const u = (a * X + b * Y + c) / w * tw - 0.5, v = (e * X + f * Y + g) / w * th - 0.5;
+      if (!(u >= 0 && v >= 0 && u < tw - 1 && v < th - 1)) continue;
+      const i0 = u | 0, j0 = v | 0, fu = u - i0, fv = v - j0, p = (j0 * tw + i0) * 4, o = (y * W + x) * 4, r = tw * 4;
+      for (let ch = 0; ch < 3; ch++)
+        d[o + ch] = (s[p + ch] * (1 - fu) + s[p + 4 + ch] * fu) * (1 - fv) + (s[p + r + ch] * (1 - fu) + s[p + r + 4 + ch] * fu) * fv;
+      d[o + 3] = 255;
+    }
+  }
+  wctx.putImageData(out, 0, 0);
+}
+
+// Photo edges cyan, thermal edges red: where they coincide the line turns white.
+function edgeImage() {
+  const { pw, ph } = an, W = warpGrad(an.Gt, an.tw, an.th, H, pw, ph), G = an.Gp;
+  const mean = a => { let s = 0, n = 0; for (const v of a) if (v === v) { s += v; n++; } return s / n || 1; };
+  const kp = 255 / (3 * mean(G)), kt = 255 / (3 * mean(W));
+  const c = document.createElement('canvas'); c.width = pw; c.height = ph;
+  const x = c.getContext('2d'), img = x.createImageData(pw, ph);
+  for (let i = 0; i < pw * ph; i++) {
+    const p = G[i] === G[i] ? G[i] * kp : 0, t = W[i] === W[i] ? W[i] * kt : 0;
+    img.data.set([t, p, p, 255], i * 4);
+  }
+  x.putImageData(img, 0, 0); return c;
+}
+
+function draw() {
+  const W = cv.width, Hh = cv.height, m = mode();
+  ctx.clearRect(0, 0, W, Hh);
+  if (m === 'edges' && ready()) { ctx.imageSmoothingEnabled = true; ctx.drawImage(edgeImage(), 0, 0, W, Hh); return drawVectors(); }
+  if (V) ctx.drawImage(V, 0, 0, W, Hh);
+  if (!ready()) return;
+  ctx.save();
+  if (m === 'swipe') { ctx.beginPath(); ctx.rect(0, 0, $('swipe').value * W, Hh); ctx.clip(); }
+  if (m === 'checker') {
+    const s = W / 8; ctx.beginPath();
+    for (let i = 0; i < 8; i++) for (let j = 0; j * s < Hh; j++) if ((i + j) % 2) ctx.rect(i * s, j * s, s, s);
+    ctx.clip();
+  }
+  ctx.globalAlpha = m === 'opacity' ? +$('opacity').value : 1;
+  ctx.drawImage(wc, 0, 0);
+  ctx.restore();
+  if (m === 'swipe') {
+    const x = $('swipe').value * W; ctx.fillStyle = '#fff'; ctx.fillRect(x - 2, 0, 4, Hh);
+    ctx.beginPath(); ctx.arc(x, Hh / 2, W * 0.025, 0, 7); ctx.fill();
+  }
+  drawVectors();
+}
+
+// While aligning: each photo point, and a line to where the fit puts its thermal twin (should be a dot, not a line).
+function drawVectors() {
+  if (!$('align').checked || !ready()) return;
+  const W = cv.width, Hh = cv.height, r = W * 0.008;
+  ctx.lineWidth = Math.max(2, W / 500);
+  complete().forEach((q, i) => {
+    const [x, y] = applyH(H, ...q.t);
+    ctx.strokeStyle = '#ff453a'; ctx.beginPath(); ctx.moveTo(q.p[0] * W, q.p[1] * Hh); ctx.lineTo(x * W, y * Hh); ctx.stroke();
+    ctx.strokeStyle = '#fff'; ctx.beginPath(); ctx.arc(q.p[0] * W, q.p[1] * Hh, r, 0, 7); ctx.stroke();
+  });
+}
+
+let errs = null; // per-pair residual in photo px, for marker colours
+const level = px => px < diag() * 0.004 ? 'good' : px < diag() * 0.01 ? 'warn' : 'bad';
+const diag = () => Math.hypot(V.naturalWidth, V.naturalHeight);
+const COLORS = { good: '#4cd964', warn: '#ffcc00', bad: '#ff453a' };
+
+function drawPick(c, img, key) {
+  if (!img) return;
+  const x = c.getContext('2d'), W = c.width, Hh = c.height, r = W * 0.018;
+  x.drawImage(img, 0, 0, W, Hh);
+  x.font = `bold ${Math.round(r * 1.3)}px system-ui`; x.textBaseline = 'middle'; x.lineWidth = Math.max(2, W / 400);
+  const done = complete();
+  pairs.forEach((q, i) => {
+    if (!q[key]) return;
+    const k = done.indexOf(q), col = errs && k >= 0 ? COLORS[level(errs[k])] : q.p && q.t ? '#fff' : '#0af';
+    const px = q[key][0] * W, py = q[key][1] * Hh;
+    x.strokeStyle = '#000'; x.beginPath(); x.arc(px, py, r, 0, 7); x.stroke();
+    x.strokeStyle = col; x.beginPath(); x.arc(px, py, r - x.lineWidth, 0, 7); x.moveTo(px - r / 3, py); x.lineTo(px + r / 3, py); x.moveTo(px, py - r / 3); x.lineTo(px, py + r / 3); x.stroke();
+    x.fillStyle = col; x.strokeStyle = '#000'; x.strokeText(i + 1, px + r * 1.1, py - r); x.fillText(i + 1, px + r * 1.1, py - r);
+  });
+}
+
+function status() {
+  if (!ready()) return;
+  const c = complete(), n = c.length, s = score(H), out = [];
+  const waiting = pairs.find(q => !(q.p && q.t));
+  out.push(`Пар точек: <b>${n}</b>${waiting ? ` (точка ${pairs.indexOf(waiting) + 1} ждёт пару на ${waiting.p ? 'тепловизоре' : 'фото'})` : ''}`);
+  out.push(n >= 4 ? 'модель: перспектива' : n === 3 ? 'модель: аффинная' : n === 2 ? 'модель: сдвиг+масштаб+поворот' : 'без точек: начальное положение');
+  errs = n >= 5 ? residuals(H, c, V.naturalWidth, V.naturalHeight) : null;
+  if (n >= 5) {
+    const loo = looErrors(c, tA(), pA(), V.naturalWidth, V.naturalHeight), sorted = [...loo].sort((a, b) => a - b);
+    const med = sorted[sorted.length >> 1], worst = errs.indexOf(Math.max(...errs));
+    out.push(`проверка (каждая точка по остальным): медиана <b class="${level(med)}">${med.toFixed(1)} px</b>`);
+    out.push(`хуже всех стоит точка <b class="${level(errs[worst])}">№${pairs.indexOf(c[worst]) + 1} (${errs[worst].toFixed(1)} px)</b>`);
+  } else if (n) out.push('для проверки ровности нужно 5+ пар');
+  if (s === s) out.push(`совпадение контуров: <b>${s.toFixed(3)}</b> (больше — ровнее)`);
+  $('status').innerHTML = out.join(' · ');
+}
+
+let raf = 0, needWarp = false;
+function render(warp) {
+  needWarp = needWarp || warp;
+  if (raf) return;
+  raf = requestAnimationFrame(() => {
+    raf = 0;
+    if (needWarp && ready()) warpThermal();
+    needWarp = false;
+    status(); draw();
+    if ($('align').checked) { drawPick($('pv'), V, 'p'); drawPick($('pt'), T, 't'); }
+  });
+}
+
+// Point picking with a magnifier. Tap empty space: new point (or the twin of a waiting one); tap a point: drag it.
+const loupe = $('loupe');
+function showLoupe(e, img, pt) {
+  const g = loupe.getContext('2d'), S = loupe.width, r = img.naturalWidth * 0.05;
+  g.imageSmoothingEnabled = false; g.fillStyle = '#000'; g.fillRect(0, 0, S, S);
+  g.drawImage(img, pt[0] * img.naturalWidth - r / 2, pt[1] * img.naturalHeight - r / 2, r, r, 0, 0, S, S);
+  g.strokeStyle = '#0f0'; g.lineWidth = 2; g.beginPath();
+  for (const [a, b] of [[0, S / 2 - 8], [S / 2 + 8, S]]) { g.moveTo(a, S / 2); g.lineTo(b, S / 2); g.moveTo(S / 2, a); g.lineTo(S / 2, b); }
+  g.stroke();
+  loupe.style.left = Math.min(innerWidth - 160, Math.max(4, e.clientX - 75)) + 'px';
+  loupe.style.top = (e.clientY > 190 ? e.clientY - 180 : e.clientY + 40) + 'px';
+  loupe.hidden = false;
+}
+function setupPick(c, key) {
+  let drag = null;
+  const rel = e => { const b = c.getBoundingClientRect(); return [(e.clientX - b.left) / b.width, (e.clientY - b.top) / b.height]; };
+  const clamp = v => Math.min(1, Math.max(0, v));
+  c.onpointerdown = e => {
+    if (!ready()) return;
+    c.setPointerCapture(e.pointerId);
+    const pos = rel(e), b = c.getBoundingClientRect();
+    let q = pairs.find(q => q[key] && Math.hypot((q[key][0] - pos[0]) * b.width, (q[key][1] - pos[1]) * b.height) < 22);
+    if (q) drag = { q, dx: q[key][0] - pos[0], dy: q[key][1] - pos[1] };
+    else {
+      q = pairs.find(q => !q[key]) || (pairs.push({ p: null, t: null }), pairs[pairs.length - 1]);
+      q[key] = pos; drag = { q, dx: 0, dy: 0 };
+    }
+    showLoupe(e, key === 'p' ? V : T, q[key]); refit();
+  };
+  c.onpointermove = e => {
+    if (!drag) return;
+    const pos = rel(e); drag.q[key] = [clamp(pos[0] + drag.dx), clamp(pos[1] + drag.dy)];
+    showLoupe(e, key === 'p' ? V : T, drag.q[key]); refit();
+  };
+  c.onpointerup = c.onpointercancel = () => { drag = null; loupe.hidden = true; };
+}
+setupPick($('pv'), 'p');
+setupPick($('pt'), 't');
+
+$('align').onchange = () => { $('pick').hidden = !$('align').checked; render(); };
+$('undo').onclick = () => { pairs.pop(); refit(); };
+$('clear').onclick = () => { pairs = []; render(); };
+$('auto').onclick = () => {
+  if (!ready()) return;
+  $('status').textContent = 'Уточняю по контурам…';
+  setTimeout(() => {
+    const before = score(H), r = refineH(H, score, tA(), pA());
+    if (r.H && r.score > before) { Hbefore = H; H = r.H; store(); $('unauto').disabled = false; }
+    render(true);
+  }, 30);
+};
+$('unauto').onclick = () => { if (Hbefore) { H = Hbefore; Hbefore = null; store(); } $('unauto').disabled = true; render(true); };
 $('copyAlign').onclick = () => {
-  const s = JSON.stringify(A);
+  const s = JSON.stringify({ H: H.map(v => +v.toFixed(7)) });
   (navigator.clipboard ? navigator.clipboard.writeText(s) : Promise.reject()).catch(() => prompt('Скопируйте:', s));
 };
 $('save').onclick = () => cv.toBlob(b => {
   const a = document.createElement('a'); a.href = URL.createObjectURL(b);
   a.download = `ir-${mode()}-${Date.now()}.png`; a.click();
 });
+$('opacity').oninput = $('swipe').oninput = () => render();
+document.querySelectorAll('input[name=mode]').forEach(r => r.onchange = () => {
+  $('rowOpacity').hidden = mode() !== 'opacity'; $('rowSwipe').hidden = mode() !== 'swipe'; render();
+});
 
-// Pointer handling: one finger drags (thermal while aligning, otherwise the swipe divider), two fingers pinch-zoom.
-const pts = new Map();
-const toCanvas = e => { const r = cv.getBoundingClientRect(); return { x:(e.clientX - r.left) / r.width, y:(e.clientY - r.top) / r.height }; };
-cv.onpointerdown = e => { cv.setPointerCapture(e.pointerId); pts.set(e.pointerId, toCanvas(e)); };
-cv.onpointerup = cv.onpointercancel = e => pts.delete(e.pointerId);
+// Main canvas: drag the swipe divider.
+cv.onpointerdown = e => { if (mode() === 'swipe') { cv.setPointerCapture(e.pointerId); cv.onpointermove(e); } };
 cv.onpointermove = e => {
-  if (!pts.has(e.pointerId)) return;
-  const prev = pts.get(e.pointerId), cur = toCanvas(e), alignOn = $('align').checked;
-  if (pts.size === 2 && alignOn) {
-    const [a, b] = [...pts.values()], other = a === prev ? b : a;
-    const d0 = Math.hypot(prev.x - other.x, prev.y - other.y), d1 = Math.hypot(cur.x - other.x, cur.y - other.y);
-    if (d0 > 0.01) A.w = Math.min(3, Math.max(0.2, A.w * d1 / d0));
-  } else if (alignOn) {
-    A.x += cur.x - prev.x; A.y += cur.y - prev.y;
-  } else if (mode() === 'swipe') {
-    $('swipe').value = cur.x;
-  }
-  pts.set(e.pointerId, cur);
-  if (alignOn) { store(); syncSliders(); }
-  draw();
+  if (mode() !== 'swipe' || !cv.hasPointerCapture(e.pointerId)) return;
+  const b = cv.getBoundingClientRect(); $('swipe').value = (e.clientX - b.left) / b.width; render();
 };
-cv.addEventListener('wheel', e => {
-  if (!$('align').checked) return;
-  e.preventDefault(); A.w = Math.min(3, Math.max(0.2, A.w * Math.exp(-e.deltaY * 0.001))); store(); syncSliders(); draw();
-}, { passive:false });
 
-// ?v=photo.jpg&t=thermal.jpg loads a pair directly (demo links, the skill).
+// ?v=photo.jpg&t=thermal.jpg&mode=swipe loads a pair directly (demo links, the skill, tests).
 const q = new URLSearchParams(location.search);
 if (q.get('v')) loadImg(q.get('v'), setPhoto);
-if (q.get('t')) loadImg(q.get('t'), img => { T = img; syncSliders(); draw(); });
-if (q.get('mode') === 'swipe') { $('mSwipe').checked = true; $('mSwipe').onchange(); }
-syncSliders(); draw();
+if (q.get('t')) loadImg(q.get('t'), setThermal);
+if (q.get('mode')) { const r = document.querySelector(`input[name=mode][value=${q.get('mode')}]`); if (r) { r.checked = true; r.onchange(); } }
+if (q.get('align')) { $('align').checked = true; $('align').onchange(); }
 </script>
 </body>
 </html>

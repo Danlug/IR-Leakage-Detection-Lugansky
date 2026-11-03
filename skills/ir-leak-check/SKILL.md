@@ -20,9 +20,10 @@ Pair images by subject and by the time stamp when there are several.
    - **Hidden pipe / leak**: a warm (hot water) or cold (cold water) line or spreading patch in a wall or floor.
    - **Electrical overheating**: a socket, plug or switch warmer than the wall by 10+ °C without a load on it. Treat as a safety issue.
 4. Make overlays so the user can see where each zone is:
-   `python overlay.py photo.jpg thermal.jpg --align '<json>' --out name` → `name_blend.png`, `name_swipe.png`.
-   The alignment JSON comes from the web app (`index.html` → «Выравнивание» → «Копировать JSON»).
-   Without it, start with `{"x":0.5,"y":0.5,"w":1,"rot":0}`, look at the result and adjust `x`,`y` (centre, share of photo) and `w` (thermal width, share of photo width).
+   `python overlay.py photo.jpg thermal.jpg --align '<json>' --out name` → `name_blend.png`, `name_swipe.png`, `name_checker.png`.
+   The alignment JSON `{"H":[9 numbers]}` comes from the web app («Совмещение по точкам» → «Копировать JSON»).
+   Without it the thermal is only placed as wide as the photo and centred: say the overlay is approximate and ask the user to align by points.
+   Check `name_checker.png`: lines (door, frame, socket) must not break at the square borders. If they do, do not point at exact spots.
 5. Report in Russian, plainly: one line per zone — where, temperature, what it most likely is, what to do. Separate "всё в норме" from "проверить".
 
 ## Limits
