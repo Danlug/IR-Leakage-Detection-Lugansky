@@ -1,7 +1,6 @@
 // Reports: AES-GCM encrypted files in a public GitHub repo. The key lives only in the link fragment (#id.key),
 // which browsers never send to a server, so the repo alone reveals nothing.
 const REPORTS_REPO = 'Danlug/IR-Reports-Lugansky';
-const RAW = `https://raw.githubusercontent.com/${REPORTS_REPO}/main/reports/`;
 const VIEW_URL = typeof location === 'object' ? new URL('view.html', location.href).href : 'view.html';
 
 const b64u = bytes => btoa(String.fromCharCode(...new Uint8Array(bytes))).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
@@ -26,9 +25,16 @@ async function decrypt(keyStr, bytes) {
 const reportLink = (id, key) => `${VIEW_URL}#${id}.${key}`;
 function parseLink(s) { const m = /#?([A-Za-z0-9]+)\.([A-Za-z0-9_-]{43})\s*$/.exec(s || ''); return m && { id: m[1], key: m[2] }; }
 
-// Read: public, no token. cache: 'no-store' so a just-edited report is not served from the browser cache.
+// raw.githubusercontent caches "main" for ~5 min, so a just-edited report would come back stale.
+// Reading by the current commit SHA is always fresh. One unauthenticated API call (60/h per IP); on failure use "main".
+let refPromise = null;
+const latestRef = () => refPromise || (refPromise = fetch(`https://api.github.com/repos/${REPORTS_REPO}/commits/main`,
+  { headers: { Accept: 'application/vnd.github.sha' }, cache: 'no-store' })
+  .then(r => r.ok ? r.text() : 'main').then(s => /^[0-9a-f]{40}$/.test(s.trim()) ? s.trim() : 'main').catch(() => 'main'));
+
+// Read: public, no token.
 async function fetchFile(id, key, name) {
-  const r = await fetch(`${RAW}${id}/${name}`, { cache: 'no-store' });
+  const r = await fetch(`https://raw.githubusercontent.com/${REPORTS_REPO}/${await latestRef()}/reports/${id}/${name}`, { cache: 'no-store' });
   if (!r.ok) throw new Error(`${name}: ${r.status}`);
   return decrypt(key, new Uint8Array(await r.arrayBuffer()));
 }
@@ -48,6 +54,7 @@ async function putFile(token, id, key, name, bytes) {
   let bin = ''; for (let i = 0; i < enc.length; i += 0x8000) bin += String.fromCharCode(...enc.subarray(i, i + 0x8000));
   const old = await gh(token, 'GET', `${id}/${name}`);
   await gh(token, 'PUT', `${id}/${name}`, { message: `report ${id}: ${name}`, content: btoa(bin), sha: old && old.sha });
+  refPromise = null; // next read picks up this commit
 }
 
 if (typeof module === 'object') module.exports = { b64u, unb64u, newKey, encrypt, decrypt, parseLink, reportLink };

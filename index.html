@@ -11,7 +11,7 @@
   header, .bar { padding:8px 16px; display:flex; flex-wrap:wrap; gap:8px 12px; align-items:center; }
   header h1 { font-size:17px; margin:0 auto 0 0; }
   label.file, button, select, .seg label { background:var(--panel); border:1px solid #333; color:var(--text); border-radius:8px; padding:8px 12px; cursor:pointer; font:inherit; }
-  input[type=text], input[type=password], textarea { background:#000; border:1px solid #333; color:var(--text); border-radius:8px; padding:8px 10px; font:inherit; }
+  input[type=text], input[type=password], input[type=number], textarea { background:#000; border:1px solid #333; color:var(--text); border-radius:8px; padding:8px 10px; font:inherit; }
   button:disabled { opacity:.4; cursor:default; }
   button.primary { background:var(--accent); border-color:var(--accent); color:#000; font-weight:600; }
   label.file input { display:none; }
@@ -29,6 +29,7 @@
   .thumb.cur { outline:3px solid var(--accent); }
   .thumb.add { font-size:28px; }
   #comment { width:calc(100% - 32px); margin:0 16px; min-height:60px; }
+  .temps input { width:90px; }
   #repMsg { padding:0 16px; color:var(--muted); word-break:break-all; } #repMsg a { color:var(--accent); }
   .stage { display:flex; justify-content:center; padding:0 16px; }
   #cv { max-width:100%; max-height:72vh; touch-action:none; background:#000; border-radius:6px; }
@@ -57,6 +58,11 @@
   </div>
   <div class="strip" id="strip"></div>
   <textarea id="comment" placeholder="Комментарий к выбранной паре — клиент увидит его под снимком"></textarea>
+  <div class="bar temps">
+    <label>Max °C <input id="tmax" type="number" step="0.1"></label>
+    <label>Min °C <input id="tmin" type="number" step="0.1"></label>
+    <span id="tnote" class="hint"></span>
+  </div>
   <div class="bar"><button id="pairDel">🗑 Удалить пару</button><button id="repClose">Закрыть отчёт</button></div>
   <div id="repMsg"></div>
 </section>
@@ -111,12 +117,13 @@
 <script src="align-core.js"></script>
 <script src="viewer.js"></script>
 <script src="report-core.js"></script>
+<script src="thermal-temp.js"></script>
 <script>
 const $ = id => document.getElementById(id);
 const AN = 384; // analysis width for edge scoring
 // shortcut: HUD boxes of this thermal camera's screenshots (u0,v0,u1,v1) are hard-coded; add boxes when another camera appears.
-const HUD = [[0, 0, 0.42, 0.2], [0.8, 0, 1, 1], [0, 0.92, 1, 1]];
-const inHud = (u, v) => HUD.some(([a, b, c, d]) => u >= a && u <= c && v >= b && v <= d);
+const ALIGN_HUD = [[0, 0, 0.42, 0.2], [0.8, 0, 1, 1], [0, 0.92, 1, 1]];
+const inHud = (u, v) => ALIGN_HUD.some(([a, b, c, d]) => u >= a && u <= c && v >= b && v <= d);
 
 let V = null, T = null, an = null;
 let pts = [];            // alignment points [{p:[x,y]|null, t:[u,v]|null}], normalised coords on photo / thermal
@@ -147,19 +154,36 @@ function analyse() {
 }
 
 const blobImg = b => new Promise((ok, err) => { if (!b) return ok(null); const i = new Image(); i.onload = () => ok(i); i.onerror = err; i.src = URL.createObjectURL(b); });
-// Show a photo/thermal pair in the editor. h/points: saved alignment of that pair, if any.
-async function show(photo, thermal, h, points) {
+// Show a photo/thermal pair in the editor. h/points: saved alignment of that pair, if any; temps: saved {tmax,tmin}.
+async function show(photo, thermal, h, points, temps) {
   curPhoto = photo; curThermal = thermal;
   [V, T] = await Promise.all([blobImg(photo), blobImg(thermal)]);
   if (V) sizePick($('pv'), V); if (T) sizePick($('pt'), T);
   pts = points ? clone(points) : []; Hbefore = null; $('unauto').disabled = true; an = null;
   if (ready()) { analyse(); H = h || H || lsGet('irld-H') || defaultH(tA(), pA()); }
   ov.setImages(V, T, ready() ? H : null);
+  // Saved Max/Min win; otherwise read them from the screenshot's HUD.
+  autoMM = ov.tData && readMaxMin(ov.tData);
+  const mm = temps && (temps.tmax != null || temps.tmin != null) ? { max: temps.tmax, min: temps.tmin } : autoMM || {};
+  $('tmax').value = mm.max ?? ''; $('tmin').value = mm.min ?? ''; tempNote();
+  if (rep && rep.pairs[cur]) Object.assign(rep.pairs[cur], curTemps()); // pairs from older reports get the auto-read values
   render();
+}
+
+// Thermal scale Max/Min of the selected pair: the client page turns colours into °C with them.
+let autoMM = null; // what readMaxMin found on the current thermal image
+const num = id => $(id).value === '' ? null : +$(id).value;
+const tempsOk = p => Number.isFinite(p.tmax) && Number.isFinite(p.tmin) && p.tmax > p.tmin;
+const curTemps = () => ({ tmax: num('tmax'), tmin: num('tmin') });
+function tempNote() {
+  const t = curTemps(), n = $('tnote');
+  if (t.tmax === null && t.tmin === null) { n.className = 'hint warn'; n.textContent = 'введите вручную — значения с экрана тепловизора'; }
+  else if (!tempsOk(t)) { n.className = 'hint bad'; n.textContent = 'нужны оба числа, Max больше Min'; }
+  else { n.className = 'hint'; n.textContent = autoMM && t.tmax === autoMM.max && t.tmin === autoMM.min ? 'прочитано автоматически' : 'введено вручную'; }
 }
 function sizePick(c, img) { const k = Math.min(1, 1000 / img.naturalWidth); c.width = img.naturalWidth * k; c.height = img.naturalHeight * k; }
 
-$('fileV').onchange = async () => { const f = $('fileV').files[0]; if (!f) return; await show(f, curThermal, H, []); imagesChanged('photo', f); };
+$('fileV').onchange = async () => { const f = $('fileV').files[0]; if (!f) return; await show(f, curThermal, H, [], curTemps()); imagesChanged('photo', f); };
 $('fileT').onchange = async () => { const f = $('fileT').files[0]; if (!f) return; await show(curPhoto, f, H, []); imagesChanged('thermal', f); };
 
 // Keep the selected report pair in step with the editor.
@@ -174,7 +198,7 @@ function imagesChanged(kind, blob) {
 }
 function syncPair() {
   if (!rep || cur < 0) return;
-  const p = rep.pairs[cur]; p.H = H && H.slice(); p.pts = clone(pts); p.comment = $('comment').value; rep.dirty = true;
+  const p = rep.pairs[cur]; p.H = H && H.slice(); p.pts = clone(pts); p.comment = $('comment').value; Object.assign(p, curTemps()); rep.dirty = true;
 }
 
 function refit() {
@@ -320,17 +344,18 @@ function renderStrip() {
     `<button class="thumb${i === cur ? ' cur' : ''}" data-i="${i}"><img src="${p.thumb || (p.thumb = URL.createObjectURL(p.photo))}"><span>${i + 1}</span></button>`).join('')
     + `<button class="thumb add${cur < 0 ? ' cur' : ''}" data-i="-1" title="Новая пара">+</button>`;
   $('comment').value = cur >= 0 ? rep.pairs[cur].comment : '';
-  $('comment').disabled = $('pairDel').disabled = cur < 0;
+  $('comment').disabled = $('tmax').disabled = $('tmin').disabled = $('pairDel').disabled = cur < 0;
 }
 $('strip').onclick = async e => {
   const b = e.target.closest('button'); if (!b) return;
   cur = +b.dataset.i;
   const p = rep.pairs[cur];
   renderStrip();
-  await show(p ? p.photo : null, p ? p.thermal : null, p ? p.H : null, p ? p.pts : []);
+  await show(p ? p.photo : null, p ? p.thermal : null, p ? p.H : null, p ? p.pts : [], p);
   if (!p) msg('Новая пара: выберите «📷 Фото» и «🌡 Тепловизор».');
 };
 $('comment').oninput = syncPair;
+$('tmax').oninput = $('tmin').oninput = () => { tempNote(); syncPair(); };
 $('pairDel').onclick = async () => {
   if (cur < 0 || !confirm(`Удалить пару ${cur + 1}?`)) return;
   rep.pairs.splice(cur, 1); rep.dirty = true; cur = -1; renderStrip(); await show(null, null, null, []);
@@ -354,7 +379,7 @@ async function openReport(r) {
     }
     rep = { id: r.id, key: r.key, title: data.title, pairs, dirty: false };
     cur = pairs.length ? 0 : -1; $('repTitle').value = rep.title; renderStrip();
-    const p = pairs[0]; await show(p && p.photo, p && p.thermal, p && p.H, p && p.pts);
+    const p = pairs[0]; await show(p && p.photo, p && p.thermal, p && p.H, p && p.pts, p);
     remember(); msg(linkHtml());
   } catch (e) { msg(`<span class="bad">Не удалось открыть отчёт: ${esc(e.message)}</span>`); }
 }
@@ -398,11 +423,13 @@ $('repSave').onclick = async () => {
       p.imgSaved = true;
     }
     msg('Сохраняю отчёт…');
+    const noTemp = rep.pairs.flatMap((p, i) => tempsOk(p) ? [] : [i + 1]);
     // shortcut: files of deleted or replaced pairs stay in the repo (encrypted, unreferenced); add cleanup if the repo grows large.
-    const data = { title: rep.title.trim(), updated: new Date().toISOString(), pairs: rep.pairs.map(p => ({ id: p.id, v: p.v, H: p.H, pts: p.pts, comment: p.comment })) };
+    const data = { title: rep.title.trim(), updated: new Date().toISOString(), pairs: rep.pairs.map(p => ({ id: p.id, v: p.v, H: p.H, pts: p.pts, comment: p.comment,
+      tmax: tempsOk(p) ? p.tmax : null, tmin: tempsOk(p) ? p.tmin : null })) };
     await putFile(token, rep.id, rep.key, 'report.enc', new TextEncoder().encode(JSON.stringify(data)));
     rep.dirty = false; remember();
-    msg('✅ Сохранено. ' + linkHtml());
+    msg('✅ Сохранено. ' + (noTemp.length ? `<span class="warn">Нет Max/Min у пар ${noTemp.join(', ')}: клиент не увидит на них температуру.</span> ` : '') + linkHtml());
   } catch (e) { msg(`<span class="bad">Ошибка сохранения: ${esc(e.message)}</span>`); }
   $('repSave').disabled = false;
 };

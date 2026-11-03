@@ -1,6 +1,6 @@
 // Photo + warped thermal on one canvas, in "opacity" or "swipe" mode. Shared by index.html (author) and view.html (client).
 // Needs align-core.js (applyH, invertH).
-function createOverlay(cv, { afterDraw } = {}) {
+function createOverlay(cv, { afterDraw, onTap } = {}) {
   const ctx = cv.getContext('2d');
   const wc = document.createElement('canvas'), wctx = wc.getContext('2d');
   const MAX_SIDE = 1600; // display cap so phones keep up
@@ -59,13 +59,20 @@ function createOverlay(cv, { afterDraw } = {}) {
     if (afterDraw) afterDraw(ctx, W, Hh);
   };
 
-  // Drag anywhere on the picture to move the swipe divider.
+  // Drag anywhere on the picture to move the swipe divider. With onTap, a press that moves less than
+  // TAP_PX is a tap: onTap(x, y) gets the canvas-normalised spot and the divider stays put.
+  const TAP_PX = 8;
+  let down = null; // press position while it still counts as a tap
+  const pick = e => { const b = cv.getBoundingClientRect(); return [(e.clientX - b.left) / b.width, (e.clientY - b.top) / b.height]; };
   const move = e => {
-    if (o.mode !== 'swipe' || !cv.hasPointerCapture(e.pointerId)) return;
-    const b = cv.getBoundingClientRect(); o.swipe = Math.min(1, Math.max(0, (e.clientX - b.left) / b.width)); o.draw();
+    if (down && Math.hypot(e.clientX - down[0], e.clientY - down[1]) > TAP_PX) down = null;
+    if (o.mode !== 'swipe' || !cv.hasPointerCapture(e.pointerId) || (onTap && down)) return;
+    o.swipe = Math.min(1, Math.max(0, pick(e)[0])); o.draw();
     if (o.onSwipe) o.onSwipe(o.swipe);
   };
-  cv.addEventListener('pointerdown', e => { if (o.mode === 'swipe') { cv.setPointerCapture(e.pointerId); move(e); } });
+  cv.addEventListener('pointerdown', e => { down = [e.clientX, e.clientY]; if (o.mode === 'swipe') { cv.setPointerCapture(e.pointerId); move(e); } });
   cv.addEventListener('pointermove', move);
+  cv.addEventListener('pointerup', e => { if (onTap && down) onTap(...pick(e)); down = null; });
+  cv.addEventListener('pointercancel', () => { down = null; });
   return o;
 }
