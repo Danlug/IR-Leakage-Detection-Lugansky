@@ -1,0 +1,149 @@
+<!doctype html>
+<html lang="ru">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>IR Leakage Detection</title>
+<style>
+  :root { --bg:#111; --panel:#1c1c1e; --text:#eee; --muted:#999; --accent:#ff6a2b; }
+  * { box-sizing:border-box; }
+  body { margin:0; background:var(--bg); color:var(--text); font:15px/1.4 system-ui, sans-serif; }
+  header, .bar { padding:10px 16px; display:flex; flex-wrap:wrap; gap:8px 14px; align-items:center; }
+  header h1 { font-size:17px; margin:0 auto 0 0; }
+  label.file, button, .seg label { background:var(--panel); border:1px solid #333; color:var(--text); border-radius:8px; padding:8px 12px; cursor:pointer; font:inherit; }
+  label.file input { display:none; }
+  .seg { display:flex; } .seg input { display:none; }
+  .seg label { border-radius:0; } .seg label:first-of-type { border-radius:8px 0 0 8px; } .seg label:last-of-type { border-radius:0 8px 8px 0; }
+  .seg input:checked + label { background:var(--accent); border-color:var(--accent); color:#000; }
+  .row { display:flex; align-items:center; gap:8px; flex:1 1 220px; }
+  .row span { color:var(--muted); min-width:92px; } .row input[type=range] { flex:1; accent-color:var(--accent); }
+  #stage { display:flex; justify-content:center; padding:0 16px; }
+  canvas { max-width:100%; max-height:72vh; touch-action:none; background:#000; border-radius:6px; }
+  .hint { color:var(--muted); font-size:13px; padding:0 16px 16px; }
+  [hidden] { display:none !important; }
+</style>
+</head>
+<body>
+<header>
+  <h1>IR Leakage Detection</h1>
+  <label class="file">📷 Фото<input id="fileV" type="file" accept="image/*"></label>
+  <label class="file">🌡 Тепловизор<input id="fileT" type="file" accept="image/*"></label>
+</header>
+
+<div class="bar">
+  <div class="seg">
+    <input type="radio" name="mode" id="mOpacity" value="opacity" checked><label for="mOpacity">Прозрачность</label>
+    <input type="radio" name="mode" id="mSwipe" value="swipe"><label for="mSwipe">Шторка</label>
+  </div>
+  <div class="row" id="rowOpacity"><span>Тепловизор</span><input id="opacity" type="range" min="0" max="1" step="0.01" value="0.6"></div>
+  <div class="row" id="rowSwipe" hidden><span>Шторка</span><input id="swipe" type="range" min="0" max="1" step="0.001" value="0.5"></div>
+</div>
+
+<div id="stage"><canvas id="cv" width="1200" height="1600"></canvas></div>
+
+<div class="bar">
+  <label><input type="checkbox" id="align"> Выравнивание</label>
+  <div class="row align"><span>Масштаб</span><input id="scale" type="range" min="0.2" max="3" step="0.005" value="1"></div>
+  <div class="row align"><span>Поворот</span><input id="rot" type="range" min="-15" max="15" step="0.1" value="0"></div>
+  <button id="reset" class="align">Сброс</button>
+  <button id="copyAlign" class="align">Копировать JSON</button>
+  <button id="save">⬇ PNG</button>
+</div>
+<p class="hint" id="hint">Загрузите фото и снимок тепловизора. В режиме «Выравнивание» тяните тепловизор пальцем/мышью, масштаб — двумя пальцами или колесом. Выравнивание запоминается для следующих пар.</p>
+
+<script>
+const $ = id => document.getElementById(id);
+const cv = $('cv'), ctx = cv.getContext('2d');
+const MAX_SIDE = 2000;           // cap export size so phones don't run out of memory
+let V = null, T = null;          // loaded images
+// Alignment in fractions of the photo so it carries over between pairs of any size:
+// x,y = thermal centre; w = thermal width as share of photo width; rot = degrees.
+const DEFAULT = { x:0.5, y:0.5, w:1, rot:0 };
+let A = load() || { ...DEFAULT };
+
+function load() { try { return JSON.parse(localStorage.getItem('irld-align')); } catch { return null; } }
+function store() { try { localStorage.setItem('irld-align', JSON.stringify(A)); } catch {} }
+const mode = () => document.querySelector('input[name=mode]:checked').value;
+
+function draw() {
+  const W = cv.width, H = cv.height, alignOn = $('align').checked;
+  ctx.clearRect(0, 0, W, H);
+  if (V) ctx.drawImage(V, 0, 0, W, H);
+  if (!T) return;
+  const swipe = mode() === 'swipe' && !alignOn, divX = $('swipe').value * W;
+  ctx.save();
+  if (swipe) { ctx.beginPath(); ctx.rect(0, 0, divX, H); ctx.clip(); }
+  ctx.globalAlpha = alignOn ? 0.5 : swipe ? 1 : +$('opacity').value;
+  const tw = A.w * W, th = tw * T.naturalHeight / T.naturalWidth;
+  ctx.translate(A.x * W, A.y * H); ctx.rotate(A.rot * Math.PI / 180);
+  ctx.drawImage(T, -tw / 2, -th / 2, tw, th);
+  ctx.restore();
+  if (swipe) {
+    ctx.fillStyle = '#fff'; ctx.fillRect(divX - 2, 0, 4, H);
+    ctx.beginPath(); ctx.arc(divX, H / 2, W * 0.025, 0, 7); ctx.fill();
+  }
+}
+
+function setPhoto(img) {
+  V = img;
+  const k = Math.min(1, MAX_SIDE / Math.max(img.naturalWidth, img.naturalHeight));
+  cv.width = Math.round(img.naturalWidth * k); cv.height = Math.round(img.naturalHeight * k);
+  draw();
+}
+function loadImg(src, cb) { const i = new Image(); i.onload = () => cb(i); i.onerror = () => alert('Не удалось открыть: ' + src); i.src = src; }
+function onFile(input, cb) { input.onchange = () => { const f = input.files[0]; if (f) loadImg(URL.createObjectURL(f), cb); }; }
+onFile($('fileV'), setPhoto);
+onFile($('fileT'), img => { T = img; if (!load()) $('align').checked = true; syncSliders(); draw(); });
+
+function syncSliders() { $('scale').value = A.w; $('rot').value = A.rot; }
+$('scale').oninput = e => { A.w = +e.target.value; store(); draw(); };
+$('rot').oninput = e => { A.rot = +e.target.value; store(); draw(); };
+$('opacity').oninput = $('swipe').oninput = $('align').onchange = draw;
+document.querySelectorAll('input[name=mode]').forEach(r => r.onchange = () => {
+  $('rowOpacity').hidden = mode() !== 'opacity'; $('rowSwipe').hidden = mode() !== 'swipe'; draw();
+});
+$('reset').onclick = () => { A = { ...DEFAULT }; store(); syncSliders(); draw(); };
+$('copyAlign').onclick = () => {
+  const s = JSON.stringify(A);
+  (navigator.clipboard ? navigator.clipboard.writeText(s) : Promise.reject()).catch(() => prompt('Скопируйте:', s));
+};
+$('save').onclick = () => cv.toBlob(b => {
+  const a = document.createElement('a'); a.href = URL.createObjectURL(b);
+  a.download = `ir-${mode()}-${Date.now()}.png`; a.click();
+});
+
+// Pointer handling: one finger drags (thermal while aligning, otherwise the swipe divider), two fingers pinch-zoom.
+const pts = new Map();
+const toCanvas = e => { const r = cv.getBoundingClientRect(); return { x:(e.clientX - r.left) / r.width, y:(e.clientY - r.top) / r.height }; };
+cv.onpointerdown = e => { cv.setPointerCapture(e.pointerId); pts.set(e.pointerId, toCanvas(e)); };
+cv.onpointerup = cv.onpointercancel = e => pts.delete(e.pointerId);
+cv.onpointermove = e => {
+  if (!pts.has(e.pointerId)) return;
+  const prev = pts.get(e.pointerId), cur = toCanvas(e), alignOn = $('align').checked;
+  if (pts.size === 2 && alignOn) {
+    const [a, b] = [...pts.values()], other = a === prev ? b : a;
+    const d0 = Math.hypot(prev.x - other.x, prev.y - other.y), d1 = Math.hypot(cur.x - other.x, cur.y - other.y);
+    if (d0 > 0.01) A.w = Math.min(3, Math.max(0.2, A.w * d1 / d0));
+  } else if (alignOn) {
+    A.x += cur.x - prev.x; A.y += cur.y - prev.y;
+  } else if (mode() === 'swipe') {
+    $('swipe').value = cur.x;
+  }
+  pts.set(e.pointerId, cur);
+  if (alignOn) { store(); syncSliders(); }
+  draw();
+};
+cv.addEventListener('wheel', e => {
+  if (!$('align').checked) return;
+  e.preventDefault(); A.w = Math.min(3, Math.max(0.2, A.w * Math.exp(-e.deltaY * 0.001))); store(); syncSliders(); draw();
+}, { passive:false });
+
+// ?v=photo.jpg&t=thermal.jpg loads a pair directly (demo links, the skill).
+const q = new URLSearchParams(location.search);
+if (q.get('v')) loadImg(q.get('v'), setPhoto);
+if (q.get('t')) loadImg(q.get('t'), img => { T = img; syncSliders(); draw(); });
+if (q.get('mode') === 'swipe') { $('mSwipe').checked = true; $('mSwipe').onchange(); }
+syncSliders(); draw();
+</script>
+</body>
+</html>
