@@ -55,6 +55,7 @@
 
 <header>
   <h1 id="title" dir="auto"></h1>
+  <button class="btn" id="pdf" data-t="pdf" hidden></button>
   <div class="langs"><button data-l="en">EN</button> <button data-l="ru">RU</button> <button data-l="he">עב</button></div>
 </header>
 
@@ -86,6 +87,7 @@
 <script src="viewer.js"></script>
 <script src="thermal-temp.js"></script>
 <script src="report-core.js"></script>
+<script src="report-pdf.js"></script>
 <script>
 const $ = id => document.getElementById(id);
 const DISCLAIMER = {
@@ -104,9 +106,9 @@ const TEXT = {
         pair: 'תמונה {0}', of: '{0} מתוך {1}', back: '→ לגלריה', prev: '→ הקודם', next: 'הבא ←', opacity: 'שקיפות', swipe: 'השוואה', disc: 'הבהרה', empty: 'אין עדיין תמונות בדוח.',
         tapHint: 'הקישו על התמונה כדי לראות את הטמפרטורה המשוערת', noTemp: 'לא ניתן לקבוע' },
 };
-Object.assign(TEXT.ru, { discTitle: 'Важно', ok: 'Понятно' });
-Object.assign(TEXT.en, { discTitle: 'Important', ok: 'I understand' });
-Object.assign(TEXT.he, { discTitle: 'חשוב', ok: 'הבנתי' });
+Object.assign(TEXT.ru, { discTitle: 'Важно', ok: 'Понятно', pdf: 'Скачать PDF', pdfBusy: 'PDF: {0} из {1}…', photo: 'Фото', overlay: 'Тепловизор поверх фото' });
+Object.assign(TEXT.en, { discTitle: 'Important', ok: 'I understand', pdf: 'Download PDF', pdfBusy: 'PDF: {0} of {1}…', photo: 'Photo', overlay: 'Thermal over photo' });
+Object.assign(TEXT.he, { discTitle: 'חשוב', ok: 'הבנתי', pdf: 'הורדת PDF', pdfBusy: 'PDF: {0} מתוך {1}…', photo: 'צילום', overlay: 'תרמית על גבי התמונה' });
 $('accept').onclick = () => { $('disclaimer').hidden = true; };
 
 // English unless this visitor picked another language before.
@@ -156,6 +158,29 @@ $('opacity').oninput = () => { ov.opacity = +$('opacity').value; ov.draw(); };
 $('swipe').oninput = () => { ov.swipe = +$('swipe').value; ov.draw(); };
 ov.onSwipe = v => { $('swipe').value = v; };
 
+const pairH = i => report.pairs[i].H || defaultH(thermals[i].naturalWidth / thermals[i].naturalHeight, photos[i].naturalWidth / photos[i].naturalHeight);
+const getThermal = async i => thermals[i] || (thermals[i] = await img(await fetchFile(link.id, link.key, `${report.pairs[i].id}-${report.pairs[i].v}-t.enc`)));
+
+$('pdf').onclick = async () => {
+  const b = $('pdf'), L = lang, n = report.pairs.length, busy = (i, m) => { b.textContent = t('pdfBusy', i, m); };
+  b.disabled = true;
+  try {
+    for (let i = 0; i < n; i++) { busy(i + 1, n); await getThermal(i); }
+    const num = x => typeof x === 'number' && isFinite(x);
+    const blob = await buildReportPdf({
+      title: report.title || t('report'), heading: t('discTitle'), disclaimer: DISCLAIMER[L], rtl: L === 'he',
+      date: report.updated ? new Date(report.updated).toLocaleDateString({ en: 'en-GB', ru: 'ru-RU', he: 'he-IL' }[L]) : '',
+      labels: { photo: t('photo'), overlay: t('overlay') },
+      pairs: report.pairs.map((p, i) => ({ label: t('pair', i + 1), photo: photos[i], thermal: thermals[i], H: pairH(i), comment: p.comment,
+        temps: num(p.tmax) && num(p.tmin) ? `Max ${p.tmax.toFixed(1)} °C · Min ${p.tmin.toFixed(1)} °C` : '' })),
+    }, busy);
+    const a = document.createElement('a'); a.href = URL.createObjectURL(blob);
+    a.download = (report.title || 'report').replace(/[\\/:*?"<>|]+/g, '_').slice(0, 80) + '.pdf';
+    document.body.append(a); a.click(); a.remove(); setTimeout(() => URL.revokeObjectURL(a.href), 60000);
+  } catch (e) { console.error(e); alert(t('bad')); }
+  b.disabled = false; b.textContent = t('pdf');
+};
+
 const img = bytes => new Promise((ok, err) => { const i = new Image(); i.onload = () => ok(i); i.onerror = err; i.src = URL.createObjectURL(new Blob([bytes], { type: 'image/jpeg' })); });
 
 function renderGallery() {
@@ -175,9 +200,9 @@ async function openPair(i) {
   $('count').textContent = t('of', i + 1, report.pairs.length);
   $('prev').disabled = i === 0; $('next').disabled = i === report.pairs.length - 1;
   $('comment').textContent = p.comment || ''; $('comment').hidden = !p.comment;
-  if (!thermals[i]) { ov.setImages(photos[i], null, null); thermals[i] = await img(await fetchFile(link.id, link.key, `${p.id}-${p.v}-t.enc`)); }
+  if (!thermals[i]) { ov.setImages(photos[i], null, null); await getThermal(i); }
   if (cur !== i) return;
-  ov.setImages(photos[i], thermals[i], p.H || defaultH(thermals[i].naturalWidth / thermals[i].naturalHeight, photos[i].naturalWidth / photos[i].naturalHeight));
+  ov.setImages(photos[i], thermals[i], pairH(i));
   const num = x => typeof x === 'number' && isFinite(x), scale = num(p.tmax) && num(p.tmin) && p.tmax > p.tmin ? { max: p.tmax, min: p.tmin } : readMaxMin(ov.tData);
   reader = scale && createTempReader(ov.tData, scale); $('tempHint').hidden = !reader;
 }
@@ -203,7 +228,7 @@ applyLang();
       say('loadingN', i + 1, report.pairs.length);
       photos[i] = await img(await fetchFile(link.id, link.key, `${p.id}-${p.v}-p.enc`));
     }
-    say(null); history.replaceState({}, ''); applyLang(); $('gallery').hidden = false;
+    say(null); history.replaceState({}, ''); applyLang(); $('gallery').hidden = false; $('pdf').hidden = false;
   } catch (e) { console.error(e); say('bad'); }
 })();
 </script>
