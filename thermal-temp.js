@@ -120,4 +120,16 @@ function readMaxMin(img) {
   return max !== null && max === top && min !== null && min === bot && max > min ? { max, min } : null;
 }
 
-if (typeof module === 'object') module.exports = { createTempReader, readMaxMin, glyphs };
+// Small temperature map for alignment: {w, h, v} with v in 0..255 (relative), NaN on HUD/crosshair/unknown colours.
+// Each cell averages a 3x3 grid of readings so the map is not fooled by single pixels.
+function tempField(img, w) {
+  const h = Math.round(w * img.height / img.width), v = new Float32Array(w * h).fill(NaN), read = createTempReader(img, { max: 255, min: 0 });
+  for (let y = 0; y < h; y++) for (let x = 0; x < w; x++) {
+    let s = 0, n = 0;
+    for (let j = 0; j < 3; j++) for (let i = 0; i < 3; i++) { const r = read((x + (i + 0.5) / 3) / w, (y + (j + 0.5) / 3) / h); if (r.ok) { s += r.t; n++; } }
+    if (n >= 5) v[y * w + x] = s / n;
+  }
+  return { w, h, v };
+}
+
+if (typeof module === 'object') module.exports = { createTempReader, readMaxMin, glyphs, tempField };

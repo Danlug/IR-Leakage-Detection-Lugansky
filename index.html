@@ -70,6 +70,8 @@
 <div class="bar">
   <label class="file">📷 Фото<input id="fileV" type="file" accept="image/*"></label>
   <label class="file">🌡 Тепловизор<input id="fileT" type="file" accept="image/*"></label>
+  <button id="autoAlign">✨ Автосовмещение</button>
+  <button id="unauto" disabled>↶ Вернуть как было</button>
   <label><input type="checkbox" id="align"> Совмещение по точкам</label>
 </div>
 
@@ -82,8 +84,7 @@
   <div class="bar">
     <button id="undo">↶ Убрать точку</button>
     <button id="clear">Очистить точки</button>
-    <button id="auto">✨ Авто‑уточнение</button>
-    <button id="unauto" disabled>Отменить уточнение</button>
+    <button id="auto">✨ Уточнить по контурам</button>
   </div>
 </section>
 
@@ -127,7 +128,7 @@ const inHud = (u, v) => ALIGN_HUD.some(([a, b, c, d]) => u >= a && u <= c && v >
 
 let V = null, T = null, an = null;
 let pts = [];            // alignment points [{p:[x,y]|null, t:[u,v]|null}], normalised coords on photo / thermal
-let H = null, Hbefore = null;
+let H = null, Hbefore = null, ptsBefore = null, autoDone = false; // autoDone: H came from «Автосовмещение»
 let rep = null, cur = -1; // open report {id,key,title,pairs:[{id,v,photo,thermal,H,pts,comment,imgSaved}]}, selected pair
 let curPhoto = null, curThermal = null; // blobs shown in the editor
 const ov = createOverlay($('cv'), { afterDraw: drawVectors });
@@ -159,7 +160,7 @@ async function show(photo, thermal, h, points, temps) {
   curPhoto = photo; curThermal = thermal;
   [V, T] = await Promise.all([blobImg(photo), blobImg(thermal)]);
   if (V) sizePick($('pv'), V); if (T) sizePick($('pt'), T);
-  pts = points ? clone(points) : []; Hbefore = null; $('unauto').disabled = true; an = null;
+  pts = points ? clone(points) : []; Hbefore = ptsBefore = null; $('unauto').disabled = true; an = null; autoDone = false;
   if (ready()) { analyse(); H = h || H || lsGet('irld-H') || defaultH(tA(), pA()); }
   ov.setImages(V, T, ready() ? H : null);
   // Saved Max/Min win; otherwise read them from the screenshot's HUD.
@@ -183,8 +184,8 @@ function tempNote() {
 }
 function sizePick(c, img) { const k = Math.min(1, 1000 / img.naturalWidth); c.width = img.naturalWidth * k; c.height = img.naturalHeight * k; }
 
-$('fileV').onchange = async () => { const f = $('fileV').files[0]; if (!f) return; await show(f, curThermal, H, [], curTemps()); imagesChanged('photo', f); };
-$('fileT').onchange = async () => { const f = $('fileT').files[0]; if (!f) return; await show(curPhoto, f, H, []); imagesChanged('thermal', f); };
+$('fileV').onchange = async () => { const f = $('fileV').files[0]; if (!f) return; await show(f, curThermal, H, [], curTemps()); imagesChanged('photo', f); runAuto(); };
+$('fileT').onchange = async () => { const f = $('fileT').files[0]; if (!f) return; await show(curPhoto, f, H, []); imagesChanged('thermal', f); runAuto(); };
 
 // Keep the selected report pair in step with the editor.
 function imagesChanged(kind, blob) {
@@ -203,7 +204,7 @@ function syncPair() {
 
 function refit() {
   const c = complete();
-  if (ready() && c.length >= 2) { H = fitH(c, tA(), pA()) || H; Hbefore = null; $('unauto').disabled = true; lsSet('irld-H', H); }
+  if (ready() && c.length >= 2) { H = fitH(c, tA(), pA()) || H; Hbefore = null; $('unauto').disabled = true; autoDone = false; lsSet('irld-H', H); }
   syncPair(); ov.setH(ready() ? H : null); render();
 }
 
@@ -244,7 +245,7 @@ function status() {
   const c = complete(), n = c.length, out = [];
   const waiting = pts.find(q => !(q.p && q.t));
   out.push(`Пар точек: <b>${n}</b>${waiting ? ` (точка ${pts.indexOf(waiting) + 1} ждёт пару на ${waiting.p ? 'тепловизоре' : 'фото'})` : ''}`);
-  out.push(n >= 4 ? 'модель: перспектива' : n === 3 ? 'модель: аффинная' : n === 2 ? 'модель: сдвиг+масштаб+поворот' : 'без точек: начальное положение');
+  out.push(n >= 4 ? 'модель: перспектива' : n === 3 ? 'модель: аффинная' : n === 2 ? 'модель: сдвиг+масштаб+поворот' : autoDone ? 'совмещено автоматически: проверьте шторкой; если плохо — «Совмещение по точкам»' : 'без точек: начальное положение');
   errs = n >= 5 ? residuals(H, c, V.naturalWidth, V.naturalHeight) : null;
   if (n >= 5) {
     const loo = looErrors(c, tA(), pA(), V.naturalWidth, V.naturalHeight).sort((a, b) => a - b);
@@ -311,11 +312,28 @@ $('auto').onclick = () => {
   $('status').textContent = 'Уточняю по контурам…';
   setTimeout(() => {
     const before = score(H), r = refineH(H, score, tA(), pA());
-    if (r.H && r.score > before) { Hbefore = H; H = r.H; lsSet('irld-H', H); $('unauto').disabled = false; }
+    if (r.H && r.score > before) { Hbefore = H; ptsBefore = null; H = r.H; lsSet('irld-H', H); $('unauto').disabled = false; }
     syncPair(); ov.setH(H); render();
   }, 30);
 };
-$('unauto').onclick = () => { if (Hbefore) { H = Hbefore; Hbefore = null; } $('unauto').disabled = true; syncPair(); ov.setH(H); render(); };
+// Alignment without points: search by the edges of the photo and of the temperature map (align-core.js autoAlign).
+function runAuto() {
+  if (!ready() || !ov.tData) return;
+  if (complete().length && !confirm('Убрать ручные точки и совместить автоматически?')) return;
+  $('status').textContent = 'Совмещаю автоматически…';
+  setTimeout(() => {
+    const pw = 96, ph = Math.round(pw / pA()), d = pixels(V, pw, ph);
+    const P = { w: pw, h: ph, v: Float32Array.from({ length: pw * ph }, (_, i) => 0.299 * d[i * 4] + 0.587 * d[i * 4 + 1] + 0.114 * d[i * 4 + 2]) };
+    const r = autoAlign(P, tempField(ov.tData, 96), tA(), pA());
+    Hbefore = H; ptsBefore = pts; H = r.H; pts = []; autoDone = true; $('unauto').disabled = false; lsSet('irld-H', H);
+    syncPair(); ov.setH(H); render();
+  }, 30);
+}
+$('autoAlign').onclick = runAuto;
+$('unauto').onclick = () => {
+  if (Hbefore) { H = Hbefore; Hbefore = null; } if (ptsBefore) { pts = ptsBefore; ptsBefore = null; }
+  $('unauto').disabled = true; autoDone = false; syncPair(); ov.setH(H); render();
+};
 $('copyAlign').onclick = () => {
   const s = JSON.stringify({ H: H.map(v => +v.toFixed(7)) });
   (navigator.clipboard ? navigator.clipboard.writeText(s) : Promise.reject()).catch(() => prompt('Скопируйте:', s));

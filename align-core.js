@@ -150,4 +150,64 @@ function refineH(H, score, tA, pA) {
   return { H: toH(c), score: best };
 }
 
-if (typeof module === 'object') module.exports = { applyH, invertH, fitH, defaultH, looErrors, residuals, gradMag, warpGrad, edgeScore, refineH };
+// ---------- Alignment without points ----------
+// The thermal screenshot's colours are bands of a colour map, so its RGB edges are mostly fake. We compare edges of the
+// TEMPERATURE field instead: photo luminance P {w,h,v} and thermal temperature T {w,h,v} (NaN = HUD/unknown), both small.
+
+function blurMag(f) { // 3x3 box blur, then central-difference gradient magnitude; NaN-aware
+  const { w, h, v } = f, b = new Float32Array(w * h), g = new Float32Array(w * h).fill(NaN);
+  for (let y = 0; y < h; y++) for (let x = 0; x < w; x++) {
+    let s = 0, n = 0;
+    for (let j = Math.max(0, y - 1); j <= Math.min(h - 1, y + 1); j++) for (let i = Math.max(0, x - 1); i <= Math.min(w - 1, x + 1); i++) {
+      const q = v[j * w + i]; if (q === q) { s += q; n++; }
+    }
+    b[y * w + x] = v[y * w + x] === v[y * w + x] && n ? s / n : NaN;
+  }
+  for (let y = 1; y < h - 1; y++) for (let x = 1; x < w - 1; x++) {
+    const i = y * w + x; g[i] = Math.hypot(b[i + 1] - b[i - 1], b[i + w] - b[i - w]); // NaN if any neighbour is NaN
+  }
+  return { w, h, g };
+}
+
+// Correlation of edge strength, sampled on the thermal grid so every scale is judged on the same pixels.
+// Thermal parts that fall outside the photo count as zero overlap; under half inside -> -1.
+function tempEdgeScore(Gp, Gt, H) {
+  let n = 0, tot = 0, sa = 0, sb = 0, saa = 0, sbb = 0, sab = 0;
+  for (let y = 1; y < Gt.h - 1; y++) for (let x = 1; x < Gt.w - 1; x++) {
+    const b = Gt.g[y * Gt.w + x]; if (b !== b) continue; tot++;
+    const [X, Y] = applyH(H, (x + 0.5) / Gt.w, (y + 0.5) / Gt.h);
+    const a = Gp.g[Math.floor(Y * Gp.h) * Gp.w + Math.floor(X * Gp.w)];
+    if (!(X >= 0 && Y >= 0 && X < 1 && Y < 1) || a !== a) continue;
+    n++; sa += a; sb += b; saa += a * a; sbb += b * b; sab += a * b;
+  }
+  if (n < 0.5 * tot) return -1;
+  const cov = sab - sa * sb / n, va = saa - sa * sa / n, vb = sbb - sb * sb / n;
+  return va > 0 && vb > 0 ? cov / Math.sqrt(va * vb) * n / tot : 0;
+}
+
+// Thermal frame placed on the photo: height hh (in photo heights), centre cx,cy, rotation rot (rad).
+function placeH(hh, cx, cy, rot, tA, pA) {
+  const w = hh * tA / pA, c = Math.cos(rot), s = Math.sin(rot);
+  const P = [[-1, -1], [1, -1], [1, 1], [-1, 1]].map(([i, j]) => {
+    const X = i * w / 2, Y = j * hh / 2 / pA; // square units (photo widths)
+    return [cx + X * c - Y * s, cy + (X * s + Y * c) * pA];
+  });
+  return fitH([[0, 0], [1, 0], [1, 1], [0, 1]].map((t, k) => ({ t, p: P[k] })), tA, pA);
+}
+
+// Grid search over size/position/small rotation, then the corner hill-climb. Returns {H, score}.
+// shortcut: the window assumes both shots were taken from about the same spot (thermal frame 0.8–1.35 photo heights,
+// near the centre), as on all the samples; a zoomed or far-off shot needs manual points.
+function autoAlign(P, T, tA, pA) {
+  const Gp = blurMag(P), Gt = blurMag(T), score = H => tempEdgeScore(Gp, Gt, H);
+  let best = { score: -2 };
+  for (let hh = 0.8; hh <= 1.36; hh *= 1.03) for (let cx = 0.34; cx <= 0.661; cx += 0.02)
+    for (let cy = 0.3; cy <= 0.621; cy += 0.02) for (const rot of [-0.03, 0, 0.03]) {
+      const H = placeH(hh, cx, cy, rot, tA, pA), s = score(H);
+      if (s > best.score) best = { H, score: s };
+    }
+  const r = refineH(best.H, score, tA, pA);
+  return r.H && r.score > best.score ? r : best;
+}
+
+if (typeof module === 'object') module.exports = { applyH, invertH, fitH, defaultH, looErrors, residuals, gradMag, warpGrad, edgeScore, refineH, blurMag, tempEdgeScore, placeH, autoAlign };
